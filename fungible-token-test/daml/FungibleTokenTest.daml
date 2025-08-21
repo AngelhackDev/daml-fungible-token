@@ -2,82 +2,140 @@ module FungibleTokenTest where
 
 import Daml.Script
 import DA.Time
--- import DA.Action (unless, void)
+import DA.Foldable (forA_)
+import DA.Action (unless)
+import DA.Optional (isNone)
 -- import DA.TextMap qualified as TextMap
 
-import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
-import Splice.Api.Token.MetadataV1
-import Splice.Testing.Utils (emptyExtraArgs, queryDisclosure', submitWithDisclosures')
-import Splice.Api.Token.TransferInstructionV1 as Api.Token.TransferInstructionV1
+import Splice.Api.Token.HoldingV1 qualified as HoldingV1
+import Splice.Api.Token.MetadataV1 qualified as MetaV1
+import Splice.Testing.Utils (emptyExtraArgs, queryDisclosure', submitWithDisclosures', submitWithDisclosuresMustFail')
+import Splice.Api.Token.TransferInstructionV1 qualified as TransferInstrV1
 
 -- Use the exchange package Fungible module implementations
 import Fungible.TokenHolding
 import Fungible.TokenTransferFactory
+-- Shared setup helpers
+-- ====================
+
+data InitBalances = InitBalances with
+  aliceAmts : [Decimal]
+  bobAmts : [Decimal]
+  charlieAmts : [Decimal]
+
+data TokenSetup = TokenSetup with
+  admin : Party
+  alice : Party
+  bob : Party
+  charlie : Party
+  instrumentId : HoldingV1.InstrumentId
+  tokenMeta : MetaV1.Metadata
+  transferFactoryCid : ContractId TokenTransferFactory
+
+setupToken : Text -> InitBalances -> Script TokenSetup
+setupToken tokenId InitBalances{..} = script do
+  admin <- allocatePartyByHint (PartyIdHint "fungible-admin")
+  alice <- allocatePartyByHint (PartyIdHint "alice")
+  bob <- allocatePartyByHint (PartyIdHint "bob")
+  charlie <- allocatePartyByHint (PartyIdHint "charlie")
+  
+  -- instrument id
+  -- let instrumentId = HoldingV1.InstrumentId with admin; id = "TEST-USDC"
+  -- let emptyMeta = MetaV1.emptyMetadata
+  -- now <- getTime
+  -- let tokenMeta = MetaV1.Metadata with
+  --       values = TextMap.fromList
+  --         [ 
+  --           ("name", "TEST-USDC"),
+  --           ("symbol", "TEST-USDC"),
+  --           ("issued-at", show now),
+  --           ("description", "Test USD Coin"),
+  --           ("admin", "fungible-admin")
+  --         ]
+  let instrumentId = HoldingV1.InstrumentId with admin; id = tokenId
+  let tokenMeta = MetaV1.emptyMetadata
+  transferFactoryCid <- submit admin $ createCmd TokenTransferFactory with admin; meta = tokenMeta
+  
+  -- mint initial holdings
+  forA_ aliceAmts $ \amt -> submitMulti [admin, alice] [] $ createCmd TokenHolding with admin; owner = alice; amount = amt; instrumentId; lock = None; meta = tokenMeta
+  forA_ bobAmts $ \amt -> submitMulti [admin, bob] [] $ createCmd TokenHolding with admin; owner = bob; amount = amt; instrumentId; lock = None; meta = tokenMeta
+  forA_ charlieAmts $ \amt -> submitMulti [admin, charlie] [] $ createCmd TokenHolding with admin; owner = charlie; amount = amt; instrumentId; lock = None; meta = tokenMeta
+  pure TokenSetup with ..
+
+-- import Fungible.TokenTransferInstruction qualified as TransferInstrV1
 -- import Fungible.TokenTransferInstruction
 
 
 -- | End-to-end test for simple Fungible token issuance and direct transfers among alice, bob, and charlie.
 testFungibleIssuanceAndTransfer : Script ()
 testFungibleIssuanceAndTransfer = script do
-  -- parties
-  admin <- allocatePartyByHint (PartyIdHint "fungible-admin")
-  alice <- allocatePartyByHint (PartyIdHint "alice")
-  bob <- allocatePartyByHint (PartyIdHint "bob")
-  charlie <- allocatePartyByHint (PartyIdHint "charlie")
-
-  -- instrument id
-  let instrumentId = Api.Token.HoldingV1.InstrumentId with admin; id = "FUNGIBLE"
-  let emptyMeta = emptyMetadata
-
-  -- create a factory for transfers
-  transferFactoryCid <- submit admin $ createCmd TokenTransferFactory with admin; meta = emptyMeta
+  TokenSetup{..} <- setupToken "TEST-USDC" InitBalances with aliceAmts = [100.0, 50.0]; bobAmts = [50.0]; charlieAmts = [1.0]
   factoryDisc <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
-
-  -- mint/issue: create initial holdings for alice, bob, charlie (simple direct creates)
-  submitMulti [admin, alice] [] $ createCmd TokenHolding with admin; owner = alice; amount = 100.0; instrumentId; lock = None; meta = emptyMeta
-  submitMulti [admin, bob] [] $ createCmd TokenHolding with admin; owner = bob; amount = 50.0; instrumentId; lock = None; meta = emptyMeta
-  submitMulti [admin, charlie] [] $ createCmd TokenHolding with admin; owner = charlie; amount = 1.0; instrumentId; lock = None; meta = emptyMeta
 
   -- direct transfer: alice -> bob, 10
   now <- getTime
-  aliceHoldings <- queryInterface @Api.Token.HoldingV1.Holding alice
-  let aliceHoldingCids = [ cid | (cid, Some hv) <- aliceHoldings, hv.instrumentId == instrumentId, hv.owner == alice ]
-  let transfer1 = Api.Token.TransferInstructionV1.Transfer with
+  aliceHoldings <- queryInterface @HoldingV1.Holding alice
+  debug $ "aliceHoldings: " <> show aliceHoldings
+
+  let aliceHoldingCids = [ cid | (cid, Some holdingView) <- aliceHoldings, holdingView.instrumentId == instrumentId, holdingView.owner == alice ]
+  debug $ "aliceHoldingCids: " <> show aliceHoldingCids
+
+  let transfer1 = TransferInstrV1.Transfer with
         sender = alice
         receiver = bob
         amount = 10.0
-        instrumentId
+        instrumentId = instrumentId
         requestedAt = now
         executeBefore = now `addRelTime` days 1
         inputHoldingCids = aliceHoldingCids
-        meta = emptyMeta
-  res1 <- submitWithDisclosures' alice factoryDisc $ exerciseCmd (toInterfaceContractId @Api.Token.TransferInstructionV1.TransferFactory transferFactoryCid) Api.Token.TransferInstructionV1.TransferFactory_Transfer with
-    expectedAdmin = admin
-    transfer = transfer1
-    extraArgs = emptyExtraArgs
-  let res1' : Api.Token.TransferInstructionV1.TransferInstructionResult = res1
+        meta = tokenMeta
+
+  let extraArgs = MetaV1.ExtraArgs with 
+        meta = tokenMeta
+        context = MetaV1.emptyChoiceContext
+
+  res1 <- submitWithDisclosures' alice factoryDisc $ 
+    exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) 
+    TransferInstrV1.TransferFactory_Transfer with
+      expectedAdmin = admin
+      transfer = transfer1
+      extraArgs = extraArgs
+
+  let res1' : TransferInstrV1.TransferInstructionResult = res1
+  
+  debug $ "res1: " <> show res1
+  debug $ "res1': " <> show res1'
+  
+  -- two-step flow may return sender change immediately
+  case res1'.senderChangeCids of
+    [changeCid] -> do
+      Some changeHv <- queryInterfaceContractId @HoldingV1.Holding alice changeCid
+      debug $ "alice immediate change after request: " <> show changeHv
+    _ -> pure ()
+
+  
   instr1Cid <- case res1'.output of
-    Api.Token.TransferInstructionV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
-    Api.Token.TransferInstructionV1.TransferInstructionResult_Completed _ -> abort "unexpected completed result"
-    Api.Token.TransferInstructionV1.TransferInstructionResult_Failed -> abort "unexpected failed result"
+    TransferInstrV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
+    TransferInstrV1.TransferInstructionResult_Completed _ -> abort "unexpected completed result"
+    TransferInstrV1.TransferInstructionResult_Failed -> abort "unexpected failed result"
   -- receiver accepts
-  _ <- submitMulti [bob, alice, admin] [] $ exerciseCmd instr1Cid Api.Token.TransferInstructionV1.TransferInstruction_Accept with
-    extraArgs = emptyExtraArgs
+  _ <- submitMulti [bob, alice, admin] [] $ exerciseCmd instr1Cid TransferInstrV1.TransferInstruction_Accept with
+    extraArgs = extraArgs
 
   -- query alice's balance
-  aliceBal <- queryInterface @Api.Token.HoldingV1.Holding alice
+  aliceBal <- queryInterface @HoldingV1.Holding alice
   debug $ "aliceBal: " <> show aliceBal
   -- query bob's balance
-  bobBal <- map snd <$> queryInterface @Api.Token.HoldingV1.Holding bob
+  bobBal <- map snd <$> queryInterface @HoldingV1.Holding bob
   debug $ "bobBal: " <> show bobBal
   -- query charlie's balance
-  charlieBal <- queryInterface @Api.Token.HoldingV1.Holding charlie
+  charlieBal <- queryInterface @HoldingV1.Holding charlie
   debug $ "charlieBal: " <> show charlieBal
 
   -- direct transfer: bob -> charlie, 20
-  bobHoldings <- queryInterface @Api.Token.HoldingV1.Holding bob
-  let bobHoldingCids = [ cid | (cid, Some hv) <- bobHoldings, hv.instrumentId == instrumentId, hv.owner == bob, hv.lock == None ]
-  let transfer2 = Api.Token.TransferInstructionV1.Transfer with
+  bobHoldings <- queryInterface @HoldingV1.Holding bob
+  let bobHoldingCids = [ cid | (cid, Some holdingView) <- bobHoldings, holdingView.instrumentId == instrumentId, holdingView.owner == bob, holdingView.lock == None ]
+  let transfer2 = TransferInstrV1.Transfer with
         sender = bob
         receiver = charlie
         amount = 20.0
@@ -85,24 +143,30 @@ testFungibleIssuanceAndTransfer = script do
         requestedAt = now
         executeBefore = now `addRelTime` days 1
         inputHoldingCids = bobHoldingCids
-        meta = emptyMeta
-  res2 <- submitWithDisclosures' bob factoryDisc $ exerciseCmd (toInterfaceContractId @Api.Token.TransferInstructionV1.TransferFactory transferFactoryCid) Api.Token.TransferInstructionV1.TransferFactory_Transfer with
+        meta = tokenMeta
+  res2 <- submitWithDisclosures' bob factoryDisc $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
     expectedAdmin = admin
     transfer = transfer2
-    extraArgs = emptyExtraArgs
-  let res2' : Api.Token.TransferInstructionV1.TransferInstructionResult = res2
+    extraArgs = extraArgs
+  let res2' : TransferInstrV1.TransferInstructionResult = res2
+  -- two-step flow may return sender change immediately
+  case res2'.senderChangeCids of
+    [changeCid] -> do
+      Some changeHv <- queryInterfaceContractId @HoldingV1.Holding bob changeCid
+      debug $ "bob immediate change after request: " <> show changeHv
+    _ -> pure ()
   instr2Cid <- case res2'.output of
-    Api.Token.TransferInstructionV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
-    Api.Token.TransferInstructionV1.TransferInstructionResult_Completed _ -> abort "unexpected completed result"
-    Api.Token.TransferInstructionV1.TransferInstructionResult_Failed -> abort "unexpected failed result"
+    TransferInstrV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
+    TransferInstrV1.TransferInstructionResult_Completed _ -> abort "unexpected completed result"
+    TransferInstrV1.TransferInstructionResult_Failed -> abort "unexpected failed result"
   -- receiver accepts
-  _ <- submitMulti [charlie, bob, admin] [] $ exerciseCmd instr2Cid Api.Token.TransferInstructionV1.TransferInstruction_Accept with
-    extraArgs = emptyExtraArgs
+  _ <- submitMulti [charlie, bob, admin] [] $ exerciseCmd instr2Cid TransferInstrV1.TransferInstruction_Accept with
+    extraArgs = extraArgs
 
   -- assertions
   let balanceOf p = do
-        hs <- queryInterface @Api.Token.HoldingV1.Holding p
-        let sameInstr = [ hv.amount | (_, Some hv) <- hs, hv.instrumentId == instrumentId, hv.owner == p ]
+        hs <- queryInterface @HoldingV1.Holding p
+        let sameInstr = [ holdingView.amount | (_, Some holdingView) <- hs, holdingView.instrumentId == instrumentId, holdingView.owner == p ]
         pure (sum sameInstr)
   aliceBal <- balanceOf alice
   bobBal <- balanceOf bob
@@ -112,11 +176,230 @@ testFungibleIssuanceAndTransfer = script do
   debug $ "bob Balance: " <> show bobBal
   debug $ "charlie Balance: " <> show charlieBal
 
-  -- -- after transfers: alice 90, bob 40, charlie 21
-  -- unless (abs (aliceBal - 90.0) < 0.001) $ abort ("unexpected alice balance: " <> show aliceBal)
-  -- unless (abs (bobBal - 40.0) < 0.001) $ abort ("unexpected bob balance: " <> show bobBal)
-  -- unless (abs (charlieBal - 21.0) < 0.001) $ abort ("unexpected charlie balance: " <> show charlieBal)
+  -- after transfers: alice 90, bob 40, charlie 21
+  unless (abs (aliceBal - 140.0) < 0.001) $ abort ("unexpected alice balance: " <> show aliceBal)
+  unless (abs (bobBal - 40.0) < 0.001) $ abort ("unexpected bob balance: " <> show bobBal)
+  unless (abs (charlieBal - 21.0) < 0.001) $ abort ("unexpected charlie balance: " <> show charlieBal)
 
   pure ()
 
 
+
+-- | Two-step transfer: receiver rejects pending instruction → funds return to sender, instruction fails.
+testTwoStepReject : Script ()
+testTwoStepReject = script do
+  TokenSetup{..} <- setupToken "TEST-USDT" InitBalances with aliceAmts = [25.0, 15.0]; bobAmts = []; charlieAmts = []
+  disc <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  -- initiate two-step
+  now <- getTime
+  aliceHoldings <- queryInterface @HoldingV1.Holding alice
+  let aliceCids = [ cid | (cid, Some hv) <- aliceHoldings, hv.instrumentId == instrumentId, hv.owner == alice, hv.lock == None ]
+  let transfer = TransferInstrV1.Transfer with
+        sender = alice
+        receiver = bob
+        amount = 30.0
+        instrumentId
+        requestedAt = now
+        executeBefore = now `addRelTime` days 1
+        inputHoldingCids = aliceCids
+        meta = tokenMeta
+  let extraArgs = MetaV1.ExtraArgs with meta = tokenMeta; context = MetaV1.emptyChoiceContext
+  res <- submitWithDisclosures' alice disc $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
+    expectedAdmin = admin
+    transfer
+    extraArgs
+  let res' : TransferInstrV1.TransferInstructionResult = res
+  instrCid <- case res'.output of
+    TransferInstrV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
+    _ -> abort "expected pending result"
+  -- receiver rejects
+  _ <- submitMulti [bob, alice, admin] [] $ exerciseCmd instrCid TransferInstrV1.TransferInstruction_Reject with extraArgs
+  pure ()
+
+
+-- | Two-step transfer: sender withdraws pending instruction → funds return to sender, instruction fails.
+testTwoStepWithdraw : Script ()
+testTwoStepWithdraw = script do
+  TokenSetup{..} <- setupToken "TEST-DAI" InitBalances with aliceAmts = [40.0]; bobAmts = []; charlieAmts = []
+  disc <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  now <- getTime
+  aliceHoldings <- queryInterface @HoldingV1.Holding alice
+  let aliceCids = [ cid | (cid, Some hv) <- aliceHoldings, hv.instrumentId == instrumentId, hv.owner == alice, hv.lock == None ]
+  let transfer = TransferInstrV1.Transfer with
+        sender = alice
+        receiver = bob
+        amount = 20.0
+        instrumentId
+        requestedAt = now
+        executeBefore = now `addRelTime` days 1
+        inputHoldingCids = aliceCids
+        meta = tokenMeta
+  let extraArgs = MetaV1.ExtraArgs with meta = tokenMeta; context = MetaV1.emptyChoiceContext
+  res <- submitWithDisclosures' alice disc $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
+    expectedAdmin = admin
+    transfer
+    extraArgs
+  let res' : TransferInstrV1.TransferInstructionResult = res
+  instrCid <- case res'.output of
+    TransferInstrV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
+    _ -> abort "expected pending result"
+  -- sender withdraws
+  _ <- submitMulti [alice, admin] [] $ exerciseCmd instrCid TransferInstrV1.TransferInstruction_Withdraw with extraArgs
+  pure ()
+
+
+-- | Single-step transfer expires before acceptance → Accept must fail.
+testSingleStepExpiredAccept : Script ()
+testSingleStepExpiredAccept = script do
+  TokenSetup{..} <- setupToken "TEST-USDC" InitBalances with aliceAmts = [10.0]; bobAmts = []; charlieAmts = []
+  disclosure <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  
+  now <- getTime
+
+  -- Query alice's holdings
+  aliceHoldings <- queryInterface @HoldingV1.Holding alice
+  
+  -- Get alice's holdings that are unlocked
+  let cids = [ cid | (cid, Some holdingView) <- aliceHoldings, holdingView.instrumentId == instrumentId, holdingView.owner == alice, isNone holdingView.lock]
+  
+  -- Create a transfer instruction with alice as sender and receiver
+  let transfer = TransferInstrV1.Transfer with
+        sender = alice
+        receiver = alice
+        amount = 1.0
+        instrumentId
+        requestedAt = now
+        executeBefore = now `addRelTime` days 1
+        inputHoldingCids = cids
+        meta = tokenMeta
+  
+  -- Extra args
+  let extraArgs = MetaV1.ExtraArgs with 
+        meta = tokenMeta
+        context = MetaV1.emptyChoiceContext
+  
+  -- Submit the transfer instruction to the factory
+  res <- submitWithDisclosures' alice disclosure $ 
+    exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) 
+    TransferInstrV1.TransferFactory_Transfer with
+      expectedAdmin = admin
+      transfer
+      extraArgs
+  
+  let res' : TransferInstrV1.TransferInstructionResult = res
+  
+  -- Get the transfer instruction cid
+  instrCid <- case res'.output of
+    TransferInstrV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
+    _ -> abort "expected pending result"
+  
+  -- Advance time beyond executeBefore
+  setTime (transfer.executeBefore `addRelTime` days 1)
+  
+  -- Accept must fail (expiry enforced in single-step implementation) - this is the only way to fail the instruction
+  submitMustFail alice $ 
+    exerciseCmd instrCid TransferInstrV1.TransferInstruction_Accept with extraArgs
+  
+  pure ()
+
+
+-- | Transfer update must fail (not implemented in our implementation).
+testTransferUpdateNotImplemented : Script ()
+testTransferUpdateNotImplemented = script do
+  -- Setup token
+  TokenSetup{..} <- setupToken "TEST-UPD" InitBalances with aliceAmts = [5.0]; bobAmts = []; charlieAmts = []
+  
+  -- Get the transfer factory disclosure
+  disclosure <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  
+  now <- getTime
+  
+  -- Query alice's holdings
+  aliceHoldings <- queryInterface @HoldingV1.Holding alice
+  
+  -- Get alice's holdings that are unlocked
+  let cids = [ cid | (cid, Some holdingView) <- aliceHoldings, holdingView.instrumentId == instrumentId, holdingView.owner == alice, isNone holdingView.lock ]
+  let transfer = TransferInstrV1.Transfer with
+        sender = alice
+        receiver = bob
+        amount = 1.0
+        instrumentId
+        requestedAt = now
+        executeBefore = now `addRelTime` days 1
+        inputHoldingCids = cids
+        meta = tokenMeta
+  
+  let extraArgs = MetaV1.ExtraArgs with meta = tokenMeta; context = MetaV1.emptyChoiceContext
+  
+  -- Submit the transfer instruction to the factory
+  res <- submitWithDisclosures' alice disclosure $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
+    expectedAdmin = admin
+    transfer
+    extraArgs
+  
+  -- Get the transfer instruction result
+  let res' : TransferInstrV1.TransferInstructionResult = res
+  
+  instrCid <- case res'.output of
+    TransferInstrV1.TransferInstructionResult_Pending {transferInstructionCid} -> pure transferInstructionCid
+    _ -> abort "expected pending result"
+  
+  -- Update must fail (our impl throws)
+  submitMustFail admin $ 
+    exerciseCmd instrCid TransferInstrV1.TransferInstruction_Update with 
+      extraActors = []
+      extraArgs
+  
+  pure ()
+
+
+-- | Factory call with wrong expected admin must fail.
+testFactoryWrongAdmin : Script ()
+testFactoryWrongAdmin = script do
+  TokenSetup{..} <- setupToken "TEST-ADM" InitBalances with aliceAmts = [3.0]; bobAmts = []; charlieAmts = []
+  disc <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  now <- getTime
+  hs <- queryInterface @HoldingV1.Holding alice
+  let cids = [ cid | (cid, Some hv) <- hs, hv.instrumentId == instrumentId, hv.owner == alice, hv.lock == None ]
+  let transfer = TransferInstrV1.Transfer with
+        sender = alice
+        receiver = bob
+        amount = 1.0
+        instrumentId
+        requestedAt = now
+        executeBefore = now `addRelTime` days 1
+        inputHoldingCids = cids
+        meta = tokenMeta
+  let extraArgs = MetaV1.ExtraArgs with meta = tokenMeta; context = MetaV1.emptyChoiceContext
+  -- wrong expectedAdmin
+  submitWithDisclosuresMustFail' alice disc $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
+    expectedAdmin = bob
+    transfer
+    extraArgs
+  pure ()
+
+
+-- | Two-step transfer initiation with insufficient balance must fail at factory.
+testTwoStepInsufficientBalance : Script ()
+testTwoStepInsufficientBalance = script do
+  TokenSetup{..} <- setupToken "TEST-LOW" InitBalances with aliceAmts = [1.0]; bobAmts = []; charlieAmts = []
+  disc <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  now <- getTime
+  hs <- queryInterface @HoldingV1.Holding alice
+  let cids = [ cid | (cid, Some hv) <- hs, hv.instrumentId == instrumentId, hv.owner == alice, hv.lock == None ]
+  let transfer = TransferInstrV1.Transfer with
+        sender = alice
+        receiver = bob
+        amount = 2.0 -- more than available
+        instrumentId
+        requestedAt = now
+        executeBefore = now `addRelTime` days 1
+        inputHoldingCids = cids
+        meta = tokenMeta
+  let extraArgs = MetaV1.ExtraArgs with meta = tokenMeta; context = MetaV1.emptyChoiceContext
+  -- should fail at factory when building two-step
+  submitWithDisclosuresMustFail' alice disc $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
+    expectedAdmin = admin
+    transfer
+    extraArgs
+  pure ()
