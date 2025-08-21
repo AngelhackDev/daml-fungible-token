@@ -1,0 +1,3 @@
+packages:
+- ./fungible-token
+- ./fungible-token-test
