@@ -31,7 +31,7 @@ References:
 
 Example setup (see `setupToken`):
 
-```daml
+```haskell
 let instrumentId = HoldingV1.InstrumentId with admin; id = "TEST-USDC"
 let tokenMeta = MetaV1.emptyMetadata
 transferFactoryCid <- submit admin $ createCmd TokenTransferFactory with admin; meta = tokenMeta
@@ -44,7 +44,7 @@ transferFactoryCid <- submit admin $ createCmd TokenTransferFactory with admin; 
 
 Example issuance:
 
-```daml
+```haskell
 submitMulti [admin, alice] [] $ createCmd TokenHolding with
   admin; owner = alice; amount = 100.0; instrumentId; lock = None; meta = tokenMeta
 ```
@@ -58,7 +58,7 @@ submitMulti [admin, alice] [] $ createCmd TokenHolding with
 
 Initiation:
 
-```daml
+```haskell
 exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid)
   TransferInstrV1.TransferFactory_Transfer with
     expectedAdmin = admin
@@ -71,7 +71,7 @@ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFact
 
 Acceptance:
 
-```daml
+```haskell
 exerciseCmd instrCid TransferInstrV1.TransferInstruction_Accept with extraArgs
 ```
 
@@ -95,7 +95,7 @@ Expiry:
 
 Typical flow:
 
-```daml
+```haskell
 -- 1) Initiate (sender)
 let res : TransferInstrV1.TransferInstructionResult =
   submitWithDisclosures' sender disc $ exerciseCmd
@@ -132,7 +132,7 @@ Implemented by [TokenAllocationFactory.daml](mdc:fungible-token/daml/Fungible/To
 
 Example (allocate):
 
-```daml
+```haskell
 exerciseCmd (toInterfaceContractId @AllocInstrV1.AllocationFactory allocFactoryCid)
   AllocInstrV1.AllocationFactory_Allocate with
     expectedAdmin = admin

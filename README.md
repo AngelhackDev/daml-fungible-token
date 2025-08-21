@@ -75,7 +75,7 @@ daml test --files daml/FungibleTokenTest.daml --scenario FungibleTokenTest:testT
 - `MetadataV1` is an open key→value map (TextMap). You can attach business attributes such as name, symbol, issued‑at, description, etc., on factories, holdings, and results.
 - Example (caller‑provided):
 
-```daml
+```haskell
 import Splice.Api.Token.MetadataV1 as M
 import DA.TextMap as TM
 
@@ -102,7 +102,7 @@ let tokenMeta = M.Metadata with
 
 ### Create a transfer instruction (factory call)
 
-```daml
+```haskell
 let extraArgs = MetaV1.ExtraArgs with
       meta = tokenMeta
       context = MetaV1.emptyChoiceContext
