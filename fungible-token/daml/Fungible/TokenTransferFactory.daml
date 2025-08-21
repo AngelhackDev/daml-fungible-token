@@ -1,9 +1,18 @@
 module Fungible.TokenTransferFactory where
 
+import DA.Time
+import DA.Optional (isNone)
+import DA.List (null)
+import DA.Foldable (forA_)
+import DA.Traversable qualified as Traversable
+
 import Splice.Api.Token.TransferInstructionV1 as Api.Token.TransferInstructionV1
 import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
 
 import Fungible.TokenTransferInstruction
+import Fungible.TwoStepTransferInstruction
+import Fungible.TokenHolding
 
 template TokenTransferFactory with
     admin : Party
@@ -26,18 +35,81 @@ template TokenTransferFactory with
         assertMsg "Positive amount" (transfer.amount > 0.0)
         assertMsg "Valid timing" (transfer.executeBefore > now)
         
-        -- Create transfer instruction
-        transferInstructionCid <- create TokenTransferInstruction with
-          transfer
-          status = Api.Token.TransferInstructionV1.TransferPendingReceiverAcceptance
-          meta = extraArgs.meta
-        
-        -- Return pending result
-        pure Api.Token.TransferInstructionV1.TransferInstructionResult with
-          senderChangeCids = []
-          output = Api.Token.TransferInstructionV1.TransferInstructionResult_Pending with
-            transferInstructionCid = toInterfaceContractId transferInstructionCid
-          meta = extraArgs.meta
+        -- If sender == receiver, or client provided unlocked inputs, fall back to single-step instruction.
+        -- Otherwise, create a two-step transfer by locking inputs at creation.
+        let isTwoStep = transfer.sender /= transfer.receiver
+
+        if not isTwoStep then do
+          transferInstructionCid <- create TokenTransferInstruction with
+            transfer
+            status = Api.Token.TransferInstructionV1.TransferPendingReceiverAcceptance
+            meta = extraArgs.meta
+
+          pure Api.Token.TransferInstructionV1.TransferInstructionResult with
+            senderChangeCids = []
+            output = Api.Token.TransferInstructionV1.TransferInstructionResult_Pending with
+              transferInstructionCid = toInterfaceContractId transferInstructionCid
+            meta = extraArgs.meta
+
+        else do
+          -- For two-step: aggregate provided inputs, archive them, create a single locked holding for the amount,
+          -- and return any change to the sender immediately.
+          -- Note: we rely on the same validations performed later at accept time.
+          assertMsg "Must have input holdings" (not (null transfer.inputHoldingCids))
+          
+          inputHoldings <- Traversable.forA transfer.inputHoldingCids $ \cid -> fetch @TokenHolding (coerceContractId cid)
+          
+          forA_ inputHoldings (\h -> do
+            assertMsg "Holding must belong to sender" (h.owner == transfer.sender)
+            assertMsg "Holding must have correct instrument" (h.instrumentId == transfer.instrumentId)
+            assertMsg "Holding must be unlocked" (isNone h.lock)
+            pure ())
+          
+          forA_ transfer.inputHoldingCids archive
+          
+          let total = sum (map (.amount) inputHoldings)
+          assertMsg "Insufficient balance for two-step" (total >= transfer.amount)
+          
+          -- sender change now
+          senderChangeCids <- if total > transfer.amount then do
+            changeCid <- create TokenHolding with
+              admin = transfer.instrumentId.admin
+              owner = transfer.sender
+              amount = total - transfer.amount
+              instrumentId = transfer.instrumentId
+              lock = None
+              meta = extraArgs.meta
+            pure [toInterfaceContractId changeCid]
+          else pure []
+          
+          -- lock the amount for the instruction
+          let lock = Some Api.Token.HoldingV1.Lock with
+                holders = [transfer.instrumentId.admin]
+                expiresAt = Some transfer.executeBefore
+                expiresAfter = None
+                context = Some ("transfer to " <> show transfer.receiver)
+          
+          -- create a locked holding for the instruction
+          lockedCid <- create TokenHolding with
+            admin = transfer.instrumentId.admin
+            owner = transfer.sender
+            amount = transfer.amount
+            instrumentId = transfer.instrumentId
+            lock = lock
+            meta = extraArgs.meta
+
+          -- create a two-step transfer instruction
+          instrCid <- create TokenTwoStepTransferInstruction with
+            transfer
+            lockedHoldingCid = lockedCid
+            meta = extraArgs.meta
+
+          -- return the result
+          pure Api.Token.TransferInstructionV1.TransferInstructionResult with
+            senderChangeCids -- sender change is returned immediately
+            output = Api.Token.TransferInstructionV1.TransferInstructionResult_Pending with
+              transferInstructionCid = toInterfaceContractId instrCid -- the instruction is pending receiver acceptance
+            meta = extraArgs.meta
 
       transferFactory_publicFetchImpl _self arg = do
         -- Validate that the expected admin matches the actual admin

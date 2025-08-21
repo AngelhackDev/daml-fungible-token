@@ -1,0 +1,90 @@
+module Fungible.TwoStepTransferInstruction where
+
+import DA.Optional (isSome)
+
+import Splice.Api.Token.TransferInstructionV1 as Api.Token.TransferInstructionV1
+import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
+
+import Fungible.TokenHolding
+
+
+-- | A two-step transfer instruction backed by a single locked holding.
+template TokenTwoStepTransferInstruction
+  with
+    transfer : Api.Token.TransferInstructionV1.Transfer
+    lockedHoldingCid : ContractId TokenHolding
+    meta : Api.Token.MetadataV1.Metadata
+  where
+    signatory transfer.instrumentId.admin, transfer.sender
+    observer transfer.receiver
+
+    interface instance Api.Token.TransferInstructionV1.TransferInstruction for TokenTwoStepTransferInstruction where
+      view = Api.Token.TransferInstructionV1.TransferInstructionView with
+        originalInstructionCid = None
+        transfer = transfer
+        status = Api.Token.TransferInstructionV1.TransferPendingReceiverAcceptance
+        meta = meta
+
+      transferInstruction_acceptImpl _self Api.Token.TransferInstructionV1.TransferInstruction_Accept{..} = do
+        -- Validate and consume the locked holding, then create receiver holding
+        locked <- fetch lockedHoldingCid
+        assertMsg "Locked holding must belong to sender" (locked.owner == transfer.sender)
+        assertMsg "Locked holding must have correct instrument" (locked.instrumentId == transfer.instrumentId)
+        assertMsg "Locked holding must be locked" (isSome locked.lock)
+
+        -- Consume the locked holding
+        archive lockedHoldingCid
+
+        -- Create holding for receiver
+        receiverHoldingCid <- create TokenHolding with
+          admin = transfer.instrumentId.admin
+          owner = transfer.receiver
+          amount = transfer.amount
+          instrumentId = transfer.instrumentId
+          lock = None
+          meta = extraArgs.meta
+
+        pure Api.Token.TransferInstructionV1.TransferInstructionResult with
+          senderChangeCids = []
+          output = Api.Token.TransferInstructionV1.TransferInstructionResult_Completed with
+            receiverHoldingCids = [toInterfaceContractId receiverHoldingCid]
+          meta = extraArgs.meta
+
+      transferInstruction_rejectImpl _self Api.Token.TransferInstructionV1.TransferInstruction_Reject{..} = do
+        -- Return funds back to the sender as an unlocked holding
+        locked <- fetch lockedHoldingCid
+        assertMsg "Locked holding must belong to sender" (locked.owner == transfer.sender)
+        archive lockedHoldingCid
+        senderHoldingCid <- create TokenHolding with
+          admin = transfer.instrumentId.admin
+          owner = transfer.sender
+          amount = locked.amount
+          instrumentId = transfer.instrumentId
+          lock = None
+          meta = extraArgs.meta
+        pure Api.Token.TransferInstructionV1.TransferInstructionResult with
+          senderChangeCids = [toInterfaceContractId senderHoldingCid]
+          output = Api.Token.TransferInstructionV1.TransferInstructionResult_Failed
+          meta = extraArgs.meta
+
+      transferInstruction_updateImpl _self _arg =
+        fail "TokenTwoStepTransferInstruction.updateImpl: not used, and thus not implemented"
+
+      transferInstruction_withdrawImpl _self Api.Token.TransferInstructionV1.TransferInstruction_Withdraw{..} = do
+        -- Same behavior as reject: return funds to sender
+        locked <- fetch lockedHoldingCid
+        assertMsg "Locked holding must belong to sender" (locked.owner == transfer.sender)
+        archive lockedHoldingCid
+        senderHoldingCid <- create TokenHolding with
+          admin = transfer.instrumentId.admin
+          owner = transfer.sender
+          amount = locked.amount
+          instrumentId = transfer.instrumentId
+          lock = None
+          meta = extraArgs.meta
+        pure Api.Token.TransferInstructionV1.TransferInstructionResult with
+          senderChangeCids = [toInterfaceContractId senderHoldingCid]
+          output = Api.Token.TransferInstructionV1.TransferInstructionResult_Failed
+          meta = extraArgs.meta
+
+
