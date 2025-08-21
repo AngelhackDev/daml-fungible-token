@@ -1,11 +1,8 @@
 module Fungible.TokenAllocation where
 
-import DA.Foldable (forA_)
 import DA.Optional (isNone)
-import DA.Text as Text
 
 import Splice.Api.Token.AllocationV1 as Api.Token.AllocationV1
-import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
 import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
 
 import Fungible.TokenHolding

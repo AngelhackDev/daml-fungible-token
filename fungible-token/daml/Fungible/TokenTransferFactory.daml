@@ -1,7 +1,5 @@
 module Fungible.TokenTransferFactory where
 
-import DA.Time
-
 import Splice.Api.Token.TransferInstructionV1 as Api.Token.TransferInstructionV1
 import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
 

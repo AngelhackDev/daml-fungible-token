@@ -1,14 +1,11 @@
 module Fungible.TokenTransferInstruction where
 
 import DA.Foldable (forA_)
-import DA.List (null)
 import DA.Optional (isNone)
-import DA.Time
+import DA.TextMap as TextMap ()
 
 import Splice.Api.Token.TransferInstructionV1 as Api.Token.TransferInstructionV1
 import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
-import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
-import DA.TextMap as TextMap ()
 
 import Fungible.TokenHolding
 

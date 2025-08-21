@@ -1,14 +1,12 @@
 module Fungible.TokenAllocationFactory where
 
-import Splice.Api.Token.AllocationInstructionV1 as Api.Token.AllocationInstructionV1
-import Splice.Api.Token.AllocationV1 as Api.Token.AllocationV1
-import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
-import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
 import DA.Action (foldlA)
 import DA.Optional (isNone)
-import DA.List (null)
-import DA.Time
 import DA.Text as Text
+
+import Splice.Api.Token.AllocationInstructionV1 as Api.Token.AllocationInstructionV1
+import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
 
 import Fungible.TokenHolding
 import Fungible.TokenAllocation
