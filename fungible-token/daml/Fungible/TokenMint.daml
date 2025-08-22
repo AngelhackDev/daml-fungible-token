@@ -1,0 +1,49 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Fungible.TokenMint where
+
+import Prelude hiding (forA)
+
+import DA.Action (when, unless, void, foldlA)
+import DA.Assert
+import DA.Exception
+import DA.Foldable (forA_)
+import DA.List (dedupSort)
+import DA.Map (Map)
+import qualified DA.Map as Map
+import DA.Optional (fromOptional, optionalToList)
+import DA.Set (Set)
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Traversable (forA)
+import qualified DA.Text as T
+import DA.Time
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 as Api.Token.HoldingV1
+import Splice.Api.Token.AllocationV1 as Api.Token.AllocationV1
+import Splice.Api.Token.TransferInstructionV1
+
+import Fungible.TokenHolding
+
+template TokenMintRequest
+  with
+    instrumentId: Api.Token.HoldingV1.InstrumentId
+    recipient: Party
+    amount: Decimal
+  where
+    signatory recipient
+    observer instrumentId.admin
+
+    choice AcceptMint: ContractId TokenHolding
+      controller instrumentId.admin
+      do
+        create TokenHolding with
+          admin = instrumentId.admin
+          owner = recipient
+          amount
+          instrumentId
+          lock = None
+          meta = Api.Token.MetadataV1.emptyMetadata -- temporarily empty now, may update later
