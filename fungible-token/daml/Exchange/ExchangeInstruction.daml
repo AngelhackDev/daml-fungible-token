@@ -77,7 +77,6 @@ template ExchangeInstruction
               TransferInstructionV1.TransferInstructionResult_Pending {transferInstructionCid, ..} -> transferInstructionCid
               TransferInstructionV1.TransferInstructionResult_Completed _ -> error "unexpected completed result"
               TransferInstructionV1.TransferInstructionResult_Failed -> error "unexpected failed result"
-        debug $ "senderChangeCids: " <> show makerToTakerResult.senderChangeCids <> " from " <> show maker <> " to " <> show taker
 
         -- 2. Transfer desired tokens from taker to maker
         takerToMakerResult <- exercise transferFactoryCid TransferInstructionV1.TransferFactory_Transfer with
