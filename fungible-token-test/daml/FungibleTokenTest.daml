@@ -184,7 +184,6 @@ testFungibleIssuanceAndTransfer = script do
   pure ()
 
 
-
 -- | Two-step transfer: receiver rejects pending instruction → funds return to sender, instruction fails.
 testTwoStepReject : Script ()
 testTwoStepReject = script do
@@ -356,11 +355,20 @@ testTransferUpdateNotImplemented = script do
 -- | Factory call with wrong expected admin must fail.
 testFactoryWrongAdmin : Script ()
 testFactoryWrongAdmin = script do
+  -- Setup token
   TokenSetup{..} <- setupToken "TEST-ADM" InitBalances with aliceAmts = [3.0]; bobAmts = []; charlieAmts = []
-  disc <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  
+  -- Query the transfer factory disclosure
+  disclosure <- queryDisclosure' @TokenTransferFactory admin transferFactoryCid
+  
+  -- Query the current time
   now <- getTime
-  hs <- queryInterface @HoldingV1.Holding alice
-  let cids = [ cid | (cid, Some hv) <- hs, hv.instrumentId == instrumentId, hv.owner == alice, hv.lock == None ]
+  
+  -- Query alice's holdings
+  aliceHoldings <- queryInterface @HoldingV1.Holding alice
+  let cids = [ cid | (cid, Some holdingView) <- aliceHoldings, holdingView.instrumentId == instrumentId, holdingView.owner == alice, isNone holdingView.lock ]
+  
+  -- Create a transfer instruction with alice as sender and bob as receiver
   let transfer = TransferInstrV1.Transfer with
         sender = alice
         receiver = bob
@@ -371,11 +379,15 @@ testFactoryWrongAdmin = script do
         inputHoldingCids = cids
         meta = tokenMeta
   let extraArgs = MetaV1.ExtraArgs with meta = tokenMeta; context = MetaV1.emptyChoiceContext
+
   -- wrong expectedAdmin
-  submitWithDisclosuresMustFail' alice disc $ exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) TransferInstrV1.TransferFactory_Transfer with
-    expectedAdmin = bob
-    transfer
-    extraArgs
+  submitWithDisclosuresMustFail' alice disclosure $ 
+    exerciseCmd (toInterfaceContractId @TransferInstrV1.TransferFactory transferFactoryCid) 
+      TransferInstrV1.TransferFactory_Transfer with
+        expectedAdmin = charlie
+        transfer
+        extraArgs
+
   pure ()
 
 
