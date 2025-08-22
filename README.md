@@ -104,6 +104,13 @@ let tokenMeta = M.Metadata with
 ### DvP allocations
 
 - Lock funds into an allocation and settle/cancel/withdraw via [TokenAllocationFactory.daml](/fungible-token/daml/Fungible/TokenAllocationFactory.daml) and [TokenAllocation.daml](/fungible-token/daml/Fungible/TokenAllocation.daml).
+- **Purpose**: Reserve funds for multi‑party or cross‑asset trades so they can be settled atomically later (Delivery‑vs‑Payment). This splits a trade into a prepare phase (allocate/lock) and a settle phase (execute/cancel/withdraw).
+- **Flow in this implementation**:
+  - **AllocationFactory** aggregates specified input holdings, archives them, returns any change to the sender, and creates a single locked holding for the leg amount. The lock is held by the settlement executor and expires at `settleBefore`.
+  - An **Allocation** references that locked holding and encodes the leg (`sender`, `receiver`, `amount`, `instrument`, `timing`, `executor`).
+  - **ExecuteTransfer** consumes the locked holding and creates the receiver holding(s).
+  - **Withdraw/Cancel** consumes the locked holding and returns an unlocked holding to the sender.
+- **Benefits**: Ensures funds are pre‑funded and cannot be double‑spent while a trade is being coordinated; interoperable with CIP‑0056 `AllocationInstructionV1`/`AllocationV1` wallets and backends.
 
 ## Usage examples
 
@@ -150,7 +157,7 @@ sequenceDiagram
 
   S->>F: TransferFactory_Transfer (sender≠receiver, inputs)
   activate F
-  F->>F: Validate + aggregate inputs
+  F->>F: Validate and archive inputs, then return change
   F->>L: Create locked holding (amount, expiresAt=executeBefore)
   F-->>S: Pending + senderChangeCids
   deactivate F
@@ -171,14 +178,16 @@ sequenceDiagram
   participant AF as AllocationFactory
   participant A as Allocation
   participant L as LockedHolding
+  participant R as Receiver
 
   E->>AF: AllocationFactory_Allocate (transferLeg, inputs)
+  AF->>AF: Validate and archive inputs, then return change
   AF->>L: Create locked holding
   AF-->>E: AllocationInstructionResult(Completed, allocationCid)
 
   E->>A: Allocation_ExecuteTransfer
   A->>L: Archive lock
-  A-->>Receiver: Create receiver holding
+  A-->>R: Create receiver holding
   A-->>E: Allocation_ExecuteTransferResult
 ```
 

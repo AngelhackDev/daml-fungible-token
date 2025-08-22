@@ -224,6 +224,7 @@ sequenceDiagram
   participant AF as AllocationFactory
   participant A as Allocation
   participant L as LockedHolding
+  participant R as Receiver
 
   E->>AF: AllocationFactory_Allocate (allocation spec, inputs)
   AF->>AF: Validate and archive inputs, then return change
@@ -231,6 +232,7 @@ sequenceDiagram
   AF-->>E: AllocationInstructionResult (Completed, allocationCid)
 
   E->>A: Allocation_ExecuteTransfer
-  A->>L: Archive lock and create receiver holdings
+  A->>L: Archive lock
+  A-->>R: Create receiver holding
   A-->>E: Allocation_ExecuteTransferResult
 ```
