@@ -1,6 +1,7 @@
 module Tests.Utils where
 
 import Daml.Script
+import DA.Optional (fromSome)
 import qualified DA.TextMap as TextMap
 
 import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
@@ -16,3 +17,9 @@ emptyExtraArgs : ExtraArgs
 emptyExtraArgs = ExtraArgs with
   context = ChoiceContext with values = TextMap.empty
   meta = emptyMetadata
+
+queryDisclosures: forall t p. (Template t, IsParties p) => p -> [ContractId t] -> Script [Optional Disclosure]
+queryDisclosures p cs = mapA (queryDisclosure p) cs
+
+fromSomes: forall a. [Optional a] -> [a]
+fromSomes = map fromSome
