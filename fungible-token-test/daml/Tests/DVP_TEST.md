@@ -1,22 +1,22 @@
-## DvP Test: Allocation-based Delivery-versus-Payment
+# DvP Test: Allocation-based Delivery-versus-Payment
 
 This document explains the end-to-end Delivery-versus-Payment flow implemented by `testAllocationDvP` in [fungible-token-test/daml/Tests/AllocationDvPTest.daml](/fungible-token-test/daml/Tests/AllocationDvPTest.daml).
 
-### Purpose
+## Purpose
 
 - Show how to allocate and settle two legs atomically across two assets:
   - Amulet (allocation and execution via the Amulet registry API)
   - USDC (allocation and execution via the local `Fungible` implementation)
 - Demonstrate correct usage of metadata, disclosures, context requirements, and controller sets for each choice.
 
-### Actors
+## Actors
 
 - Sender (Alice): sends Amulet to Bob.
 - Receiver (Bob): sends USDC to Alice.
 - Executor (Provider): coordinates and executes the settlement legs.
 - Registry Admin (DSO): `amuletRegistry.dso` for Amulet; `fungibleAdmin` for USDC.
 
-### Key Files and Modules
+## Key Files and Modules
 
 - Test script: [fungible-token-test/daml/Tests/AllocationDvPTest.daml](/fungible-token-test/daml/Tests/AllocationDvPTest.daml)
 - Fungible allocation factory: [fungible-token/daml/Fungible/TokenAllocationFactory.daml](/fungible-token/daml/Fungible/TokenAllocationFactory.daml)
@@ -24,7 +24,7 @@ This document explains the end-to-end Delivery-versus-Payment flow implemented b
 - Shared setup utilities: [fungible-token-test/daml/Shared/Utils.daml](/fungible-token-test/daml/Shared/Utils.daml)
 - Registry testing helpers: [external-test-sources/splice-token-standard-test/daml/Splice/Testing/Registries/AmuletRegistry.daml](/external-test-sources/splice-token-standard-test/daml/Splice/Testing/Registries/AmuletRegistry.daml), [external-test-sources/splice-token-standard-test/daml/Splice/Testing/TokenStandard/RegistryApi.daml](/external-test-sources/splice-token-standard-test/daml/Splice/Testing/TokenStandard/RegistryApi.daml), [external-test-sources/splice-token-standard-test/daml/Splice/Testing/Utils.daml](/external-test-sources/splice-token-standard-test/daml/Splice/Testing/Utils.daml)
 
-### High-level Workflow
+## High-level Workflow
 
 1. Setup
    - Initialize Amulet registry (DevNet) and derive `amuletId`.
@@ -55,7 +55,7 @@ This document explains the end-to-end Delivery-versus-Payment flow implemented b
    - Optionally compute balances for both assets for both parties and log them.
    - Ensure no outstanding `Allocation` interface contracts remain for the executor.
 
-### Sequence Diagram
+## Sequence Diagram
 
 ```mermaid
 sequenceDiagram
@@ -87,7 +87,7 @@ sequenceDiagram
   Provider->>Provider: Verify results (balances, no outstanding allocations)
 ```
 
-### Important Details and Gotchas
+## Important Details and Gotchas
 
 - Required context for Amulet
   - Amulet choices expect a `ChoiceContext` containing at least `amulet-rules` and `open-round`.
@@ -106,7 +106,7 @@ sequenceDiagram
   - The USDC allocation and execution pass the fungible token metadata (`fungibleMetadata`) for observability.
   - The Amulet registry may add metadata such as burn amounts on results.
 
-### Code Snippets
+## Code Snippets
 
 Allocate Amulet (Alice) via registry with enriched context:
 
@@ -163,7 +163,7 @@ _ <- submitMulti [provider, alice, bob] [] $ exerciseCmd
       context = Api.Token.MetadataV1.emptyChoiceContext
 ```
 
-### Design Choices
+## Design Choices
 
 - Keep atomicity at the app layer
   - This example executes legs sequentially within the same high-level script, but each leg is executed separately.
@@ -172,13 +172,13 @@ _ <- submitMulti [provider, alice, bob] [] $ exerciseCmd
 - Simple input selection
   - Inputs are selected by filtering unlocked holdings for the instrument. Real wallets may implement UTXO selection policies.
 
-### Validation Checklist
+## Validation Checklist
 
 - Alice receives a USDC holding with the agreed amount.
 - Amulet and USDC allocations both complete successfully.
 - No outstanding `Allocation` interface contracts are visible to the executor after execution.
 
-### Troubleshooting
+## Troubleshooting
 
 - “Missing context entry for: amulet-rules”
   - Ensure to call `RegistryApi.getAllocationFactory` (allocate) and
@@ -186,5 +186,3 @@ _ <- submitMulti [provider, alice, bob] [] $ exerciseCmd
 
 - “Attempt to fetch or exercise a contract not visible…”
   - Add `amuletRegistry.dso` to the `readAs` list in `submitMulti` for the Amulet execution step so the referenced registry state is visible.
-
-
